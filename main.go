@@ -25,34 +25,88 @@ func main() {
 	start := time.Now()
 	results := RunWorkers(ctx, cfg, executor)
 
-	var total int
-	var transportErrors int
-	var httpErrors int
+	metrics := NewStreamingMetrics()
 
-	for result := range results {
-		total++
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
-		if result.Err != nil {
-			transportErrors++
-		} else if result.StatusCode < 200 ||
-			result.StatusCode >= 400 {
-			httpErrors++
+	for results != nil {
+		select {
+		case result, ok := <-results:
+			if !ok {
+				results = nil
+				continue
+			}
+
+			metrics.Record(result)
+
+		case <-ticker.C:
+			RenderDashboard(
+				os.Stdout,
+				metrics,
+				start,
+				cfg.Duration,
+			)
 		}
 	}
 
+	// Render the final live snapshot before the final summary.
+	RenderDashboard(
+		os.Stdout,
+		metrics,
+		start,
+		cfg.Duration,
+	)
+
 	elapsed := time.Since(start)
-	if elapsed <= 0 {
-		elapsed = time.Nanosecond
+
+	report := BuildReport(cfg, elapsed, metrics)
+
+	if cfg.JSONOutput != "" {
+		if err := WriteJSONReport(cfg.JSONOutput, report); err != nil {
+			fmt.Fprintln(os.Stderr, "JSON report error:", err)
+		} else {
+			fmt.Println("JSON report:", cfg.JSONOutput)
+		}
 	}
+
+	if cfg.CSVOutput != "" {
+		if err := WriteCSVReport(cfg.CSVOutput, report); err != nil {
+			fmt.Fprintln(os.Stderr, "CSV report error:", err)
+		} else {
+			fmt.Println("CSV report:", cfg.CSVOutput)
+		}
+	}
+
+	snapshot := metrics.Snapshot()
 
 	fmt.Println("\nAPI Load Test Complete")
 	fmt.Println("----------------------")
-	fmt.Println("Target:          ", cfg.URL)
-	fmt.Println("Workers:         ", cfg.Concurrency)
-	fmt.Println("Elapsed:         ", elapsed.Round(time.Millisecond))
-	fmt.Println("Completed:       ", total)
-	fmt.Println("Transport errors:", transportErrors)
-	fmt.Println("HTTP errors:     ", httpErrors)
-	fmt.Printf("Throughput:       %.2f req/s\n",
-		float64(total)/elapsed.Seconds())
+	fmt.Println("Target:             ", cfg.URL)
+	fmt.Println("Workers:            ", cfg.Concurrency)
+	fmt.Println("Rate limit:         ", cfg.Rate, "requests/sec")
+	fmt.Println("Elapsed:            ", elapsed.Round(time.Millisecond))
+	fmt.Println("Total requests:     ", snapshot.TotalRequests)
+	fmt.Println("Successful:         ", snapshot.SuccessfulRequests)
+	fmt.Println("HTTP errors:        ", snapshot.HTTPErrors)
+	fmt.Println("Transport errors:   ", snapshot.TransportErrors)
+	fmt.Println("Total bytes:        ", snapshot.TotalBytes)
+	fmt.Println("Average latency:    ", snapshot.AverageLatency())
+	fmt.Printf(
+		"Throughput:          %.2f req/s\n",
+		snapshot.Throughput(elapsed),
+	)
+
+	fmt.Println("\nStreaming latency percentiles")
+
+	for _, p := range []float64{0.50, 0.90, 0.95, 0.99} {
+		latency, ok := metrics.Quantile(p)
+
+		if !ok {
+			fmt.Printf("p%.0f: no samples\n", p*100)
+			continue
+		}
+
+		fmt.Printf("p%.0f: %v\n", p*100, latency)
+	}
 }

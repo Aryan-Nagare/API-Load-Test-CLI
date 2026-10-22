@@ -13,6 +13,8 @@ type Config struct {
 	Concurrency int
 	Duration    time.Duration
 	Rate        int
+	JSONOutput  string
+	CSVOutput   string
 }
 
 func ParseConfig() (Config, error) {
@@ -23,6 +25,19 @@ func ParseConfig() (Config, error) {
 	flag.IntVar(&cfg.Concurrency, "c", 10, "Number of concurrent workers")
 	flag.StringVar(&duration, "d", "30s", "Test duration")
 	flag.IntVar(&cfg.Rate, "r", 0, "Target request starts per second (0 = unlimited)")
+
+	flag.StringVar(
+		&cfg.JSONOutput,
+		"json",
+		"results/report.json",
+		"Path for JSON report",
+	)
+	flag.StringVar(
+		&cfg.CSVOutput,
+		"csv",
+		"results/report.csv",
+		"Path for CSV report",
+	)
 
 	flag.Parse()
 
