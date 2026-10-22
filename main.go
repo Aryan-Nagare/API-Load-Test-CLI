@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 )
 
 func main() {
@@ -15,18 +16,43 @@ func main() {
 
 	executor := NewHTTPExecutor()
 
-	result := executor.Do(
+	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		cfg.URL,
+		cfg.Duration,
 	)
+	defer cancel()
 
-	fmt.Println("API Load Tester")
-	fmt.Println("Status: ", result.StatusCode)
-	fmt.Println("Latency:", result.Latency)
-	fmt.Println("Bytes:  ", result.Bytes)
+	start := time.Now()
+	results := RunWorkers(ctx, cfg, executor)
 
-	if result.Err != nil {
-		fmt.Fprintln(os.Stderr, "Request error:", result.Err)
-		os.Exit(1)
+	var total int
+	var transportErrors int
+	var httpErrors int
+
+	for result := range results {
+		total++
+
+		if result.Err != nil {
+			transportErrors++
+		} else if result.StatusCode < 200 ||
+			result.StatusCode >= 400 {
+			httpErrors++
+		}
 	}
+
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		elapsed = time.Nanosecond
+	}
+
+	fmt.Println("\nAPI Load Test Complete")
+	fmt.Println("----------------------")
+	fmt.Println("Target:          ", cfg.URL)
+	fmt.Println("Workers:         ", cfg.Concurrency)
+	fmt.Println("Elapsed:         ", elapsed.Round(time.Millisecond))
+	fmt.Println("Completed:       ", total)
+	fmt.Println("Transport errors:", transportErrors)
+	fmt.Println("HTTP errors:     ", httpErrors)
+	fmt.Printf("Throughput:       %.2f req/s\n",
+		float64(total)/elapsed.Seconds())
 }
